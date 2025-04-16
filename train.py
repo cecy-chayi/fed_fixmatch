@@ -304,7 +304,7 @@ def main():
     logger.info(
         f"  Total train batch size = {args.batch_size*args.world_size}")
     # logger.info(f"  Total optimization steps = {args.total_steps}")
-    logger.info(f"  Total optimization steps = {args.local_ep * args.total_cr}")
+    logger.info(f"  Total optimization steps per client = {args.local_ep * args.total_cr * args.eval_step}")
 
     model.zero_grad()
     # train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
@@ -329,7 +329,6 @@ def main():
             batch_size=args.batch_size * args.mu,
             num_workers=args.num_workers,
             drop_last=True)
-
         client = Client(args, client_id, model, labeled_trainloader, unlabeled_trainloader)
         clients.append(client)
 
@@ -341,7 +340,7 @@ def main():
         mask_probs = AverageMeter()
         for client_id in range(args.num_clients):
             client_weight, client_losses, client_losses_x, client_losses_u, client_mask_probs = clients[client_id].train(
-                args, model, optimizer, scheduler)
+                args, model)
             client_weights.append(client_weight)
             losses.update(client_losses)
             losses_x.update(client_losses_x)
