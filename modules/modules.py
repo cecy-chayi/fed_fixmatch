@@ -69,8 +69,7 @@ class Client:
             if not args.no_progress:
                 p_bar = tqdm(range(args.eval_step),
                              disable=args.local_rank not in [-1, 0])
-            # for batch_idx in range(args.eval_step):
-            for batch_idx in range(len(self.labeled_trainloader)):
+            for batch_idx in range(args.eval_step):
                 try:
                     # inputs_x, targets_x = labeled_iter.next()
                     # error occurs ↓
