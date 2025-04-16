@@ -416,8 +416,8 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
     labeled_iter = iter(labeled_trainloader)
     unlabeled_iter = iter(unlabeled_trainloader)
 
-    model.train()
     for epoch in range(args.start_epoch, args.epochs):
+        model.train()
         batch_time = AverageMeter()
         data_time = AverageMeter()
         losses = AverageMeter()

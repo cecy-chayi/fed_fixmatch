@@ -56,6 +56,7 @@ class Client:
         self.model.load_state_dict(global_model.state_dict())
 
         for epoch in range(args.local_ep):
+            self.model.train()
             labeled_iter = iter(self.labeled_trainloader)
             unlabeled_iter = iter(self.unlabeled_trainloader)
 
@@ -66,36 +67,35 @@ class Client:
             losses_u = AverageMeter()
             mask_probs = AverageMeter()
             if not args.no_progress:
-                p_bar = tqdm(range(args.local_ep),
+                p_bar = tqdm(range(args.eval_step),
                              disable=args.local_rank not in [-1, 0])
             # for batch_idx in range(args.eval_step):
             for batch_idx in range(len(self.labeled_trainloader)):
                 try:
-                    inputs_x, targets_x = labeled_iter.next()
-                    # error occurs ↓
-                    # inputs_x, targets_x = next(labeled_iter)
-                except:
-                    break
-                    # if args.world_size > 1:
-                    #     labeled_epoch += 1
-                    #     labeled_trainloader.sampler.set_epoch(labeled_epoch)
-                    # labeled_iter = iter(labeled_trainloader)
                     # inputs_x, targets_x = labeled_iter.next()
                     # error occurs ↓
-                    # inputs_x, targets_x = next(labeled_iter)
+                    inputs_x, targets_x = next(labeled_iter)
+                except:
+                    if args.world_size > 1:
+                        labeled_epoch += 1
+                        self.labeled_trainloader.sampler.set_epoch(labeled_epoch)
+                    labeled_iter = iter(self.labeled_trainloader)
+                    # inputs_x, targets_x = labeled_iter.next()
+                    # error occurs ↓
+                    inputs_x, targets_x = next(labeled_iter)
 
                 try:
-                    (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
+                    # (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
                     # error occurs ↓
-                    # (inputs_u_w, inputs_u_s), _ = next(unlabeled_iter)
+                    (inputs_u_w, inputs_u_s), _ = next(unlabeled_iter)
                 except:
                     if args.world_size > 1:
                         unlabeled_epoch += 1
                         self.unlabeled_trainloader.sampler.set_epoch(unlabeled_epoch)
                     unlabeled_iter = iter(self.unlabeled_trainloader)
-                    (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
+                    # (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
                     # error occurs ↓
-                    # (inputs_u_w, inputs_u_s), _ = next(unlabeled_iter)
+                    (inputs_u_w, inputs_u_s), _ = next(unlabeled_iter)
 
                 data_time.update(time.time() - end)
                 batch_size = inputs_x.shape[0]
@@ -143,7 +143,7 @@ class Client:
                             epoch=epoch + 1,
                             epochs=args.local_ep,
                             batch=batch_idx + 1,
-                            iter=len(self.labeled_trainloader),
+                            iter=args.eval_step,
                             lr=scheduler.get_last_lr()[0],
                             data=data_time.avg,
                             bt=batch_time.avg,
@@ -151,7 +151,7 @@ class Client:
                             loss_x=losses_x.avg,
                             loss_u=losses_u.avg,
                             mask=mask_probs.avg))
-                p_bar.update()
+                    p_bar.update()
 
             if not args.no_progress:
                 p_bar.close()
