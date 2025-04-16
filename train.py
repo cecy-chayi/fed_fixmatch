@@ -332,7 +332,7 @@ def main():
         client = Client(args, client_id, model, labeled_trainloader, unlabeled_trainloader)
         clients.append(client)
 
-    for epoch in range(args.total_cr):
+    for epoch in range(args.start_epoch, args.total_cr):
         client_weights = []
         losses = AverageMeter()
         losses_x = AverageMeter()
