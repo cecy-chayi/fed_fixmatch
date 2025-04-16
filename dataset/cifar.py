@@ -1,3 +1,4 @@
+import copy
 import logging
 import math
 
@@ -50,6 +51,75 @@ def get_cifar10(args, root):
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset
 
 
+def get_federate_cifar10(args, root):
+    """
+    生成每个客户端的数据集，划分方法是：将cifar10数据集平均分到每个客户端中，然后再对每个客户端上的数据集利用
+    x_u_split函数得到每个客户端的labeled和unlabeled数据集
+    Args:
+        args: args.num_labeled记录了所有客户端上labeled数据的数量
+        root: 数据集的根目录
+    Returns:
+        train_labeled_dataset: 所有客户端上的labeled数据集的列表
+        train_unlabeled_dataset: 所有客户端上的unlabeled数据集的列表
+        test_dataset: 测试集
+    """
+    transform_labeled = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=32,
+                              padding=int(32*0.125),
+                              padding_mode='reflect'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+    ])
+    transform_val = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+    ])
+    base_dataset = datasets.CIFAR10(root, train=True, download=True)
+    all_data = np.array(base_dataset.data)
+    all_targets = np.array(base_dataset.targets)
+    data_per_client = len(all_data) // args.num_clients
+
+    train_split_labeled_dataset = []
+    train_split_unlabeled_dataset = []
+
+    args.num_labeled = args.num_labeled // args.num_clients
+
+    for i in range(args.num_clients):
+        start = i * data_per_client
+        end = (i + 1) * data_per_client if i != args.num_clients - 1 else len(all_data)
+
+        client_data = all_data[start:end]
+        client_targets = all_targets[start:end]
+
+        train_labeled_idxs, train_unlabeled_idxs = x_u_split(
+            args, client_targets, True)
+
+        global_labeled_idx = np.arange(start, end)[train_labeled_idxs]
+        global_unlabeled_idx = np.arange(start, end)[train_unlabeled_idxs]
+
+        labeled_dataset = CIFAR10SSL(
+            root, global_labeled_idx, train=True,
+            transform=transform_labeled)
+
+        unlabeled_dataset = CIFAR10SSL(
+            root, global_unlabeled_idx, train=True,
+            transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std))
+
+        train_split_labeled_dataset.append(labeled_dataset)
+        train_split_unlabeled_dataset.append(unlabeled_dataset)
+
+    test_dataset = datasets.CIFAR10(
+        root, train=False, transform=transform_val, download=False)
+
+    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset
+
+
+
+
+
+
+
 def get_cifar100(args, root):
 
     transform_labeled = transforms.Compose([
@@ -84,7 +154,7 @@ def get_cifar100(args, root):
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset
 
 
-def x_u_split(args, labels):
+def x_u_split(args, labels, is_federated=False):
     label_per_class = args.num_labeled // args.num_classes
     labels = np.array(labels)
     labeled_idx = []
@@ -97,11 +167,18 @@ def x_u_split(args, labels):
     labeled_idx = np.array(labeled_idx)
     assert len(labeled_idx) == args.num_labeled
 
-    if args.expand_labels or args.num_labeled < args.batch_size:
-        num_expand_x = math.ceil(
-            args.batch_size * args.eval_step / args.num_labeled)
-        labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
-    np.random.shuffle(labeled_idx)
+    if not is_federated:
+        if args.expand_labels or args.num_labeled < args.batch_size:
+            num_expand_x = math.ceil(
+                args.batch_size * args.eval_step / args.num_labeled)
+            labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
+        np.random.shuffle(labeled_idx)
+    else:
+        if args.expand_labels or args.num_labeled < args.batch_size:
+            num_expand_x = math.ceil(
+                args.batch_size * args.local_ep / args.num_labeled)
+            labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
+        np.random.shuffle(labeled_idx)
     return labeled_idx, unlabeled_idx
 
 
@@ -180,3 +257,8 @@ class CIFAR100SSL(datasets.CIFAR100):
 
 DATASET_GETTERS = {'cifar10': get_cifar10,
                    'cifar100': get_cifar100}
+
+FEDERATED_DATASET_GETTERS = {
+    'cifar10': get_federate_cifar10,
+    # 'cifar100': get_federate_cifar100
+}

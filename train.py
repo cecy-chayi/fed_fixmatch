@@ -1,4 +1,5 @@
 import argparse
+import copy
 import logging
 import math
 import os
@@ -16,8 +17,10 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from modules.modules import Client
 
 from dataset.cifar import DATASET_GETTERS
+from dataset.cifar import FEDERATED_DATASET_GETTERS
 from utils import AverageMeter, accuracy
 
 logger = logging.getLogger(__name__)
@@ -55,14 +58,14 @@ def get_cosine_schedule_with_warmup(optimizer,
     return LambdaLR(optimizer, _lr_lambda, last_epoch)
 
 
-def interleave(x, size):
-    s = list(x.shape)
-    return x.reshape([-1, size] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
-
-
-def de_interleave(x, size):
-    s = list(x.shape)
-    return x.reshape([size, -1] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
+# def interleave(x, size):
+#     s = list(x.shape)
+#     return x.reshape([-1, size] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
+#
+#
+# def de_interleave(x, size):
+#     s = list(x.shape)
+#     return x.reshape([size, -1] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
 
 
 def main():
@@ -97,7 +100,7 @@ def main():
                         help='weight decay')
     parser.add_argument('--nesterov', action='store_true', default=True,
                         help='use nesterov momentum')
-    parser.add_argument('--use-ema', action='store_true', default=True,
+    parser.add_argument('--use-ema', action='store_true', default=False,
                         help='use EMA model')
     parser.add_argument('--ema-decay', default=0.999, type=float,
                         help='EMA decay rate')
@@ -124,9 +127,16 @@ def main():
                         help="For distributed training: local_rank")
     parser.add_argument('--no-progress', action='store_true',
                         help="don't use progress bar")
+    parser.add_argument('--total-cr', type=int, default=800,
+                        help='total number of communication rounds')
+    parser.add_argument('--num-clients', type=int, default=10,
+                        help='number of clients')
+    parser.add_argument('--local-ep', type=int, default=5,
+                        help='number of local epochs')
 
     args = parser.parse_args()
     global best_acc
+    test_accs = []
 
     def create_model(args):
         if args.arch == 'wideresnet':
@@ -202,7 +212,9 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
-    labeled_dataset, unlabeled_dataset, test_dataset = DATASET_GETTERS[args.dataset](
+    # labeled_dataset, unlabeled_dataset, test_dataset = DATASET_GETTERS[args.dataset](
+    #     args, './data')
+    split_labeled_dataset, split_unlabeled_dataset, test_dataset = FEDERATED_DATASET_GETTERS[args.dataset](
         args, './data')
 
     if args.local_rank == 0:
@@ -210,19 +222,19 @@ def main():
 
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler
 
-    labeled_trainloader = DataLoader(
-        labeled_dataset,
-        sampler=train_sampler(labeled_dataset),
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        drop_last=True)
-
-    unlabeled_trainloader = DataLoader(
-        unlabeled_dataset,
-        sampler=train_sampler(unlabeled_dataset),
-        batch_size=args.batch_size*args.mu,
-        num_workers=args.num_workers,
-        drop_last=True)
+    # labeled_trainloader = DataLoader(
+    #     labeled_dataset,
+    #     sampler=train_sampler(labeled_dataset),
+    #     batch_size=args.batch_size,
+    #     num_workers=args.num_workers,
+    #     drop_last=True)
+    #
+    # unlabeled_trainloader = DataLoader(
+    #     unlabeled_dataset,
+    #     sampler=train_sampler(unlabeled_dataset),
+    #     batch_size=args.batch_size*args.mu,
+    #     num_workers=args.num_workers,
+    #     drop_last=True)
 
     test_loader = DataLoader(
         test_dataset,
@@ -250,7 +262,8 @@ def main():
     optimizer = optim.SGD(grouped_parameters, lr=args.lr,
                           momentum=0.9, nesterov=args.nesterov)
 
-    args.epochs = math.ceil(args.total_steps / args.eval_step)
+    # args.epochs = math.ceil(args.total_steps / args.eval_step)
+    args.epochs = args.total_cr
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, args.warmup, args.total_steps)
 
@@ -285,18 +298,107 @@ def main():
             output_device=args.local_rank, find_unused_parameters=True)
 
     logger.info("***** Running training *****")
-    logger.info(f"  Task = {args.dataset}@{args.num_labeled}")
+    logger.info(f"  Task = {args.dataset}@{args.num_labeled * args.num_clients}")
     logger.info(f"  Num Epochs = {args.epochs}")
     logger.info(f"  Batch size per GPU = {args.batch_size}")
     logger.info(
         f"  Total train batch size = {args.batch_size*args.world_size}")
-    logger.info(f"  Total optimization steps = {args.total_steps}")
+    # logger.info(f"  Total optimization steps = {args.total_steps}")
+    logger.info(f"  Total optimization steps = {args.local_ep * args.total_cr}")
 
     model.zero_grad()
-    train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
-          model, optimizer, ema_model, scheduler)
+    # train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
+    #       model, optimizer, ema_model, scheduler)
+
+    # TODO(qxr): 联邦学习框架
+    clients = []
+    for client_id in range(args.num_clients):
+        labeled_dataset = split_labeled_dataset[client_id]
+        unlabeled_dataset = split_unlabeled_dataset[client_id]
+
+        labeled_trainloader = DataLoader(
+            labeled_dataset,
+            sampler=train_sampler(labeled_dataset),
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            drop_last=True)
+
+        unlabeled_trainloader = DataLoader(
+            unlabeled_dataset,
+            sampler=train_sampler(unlabeled_dataset),
+            batch_size=args.batch_size * args.mu,
+            num_workers=args.num_workers,
+            drop_last=True)
+
+        client = Client(args, client_id, model, labeled_trainloader, unlabeled_trainloader)
+        clients.append(client)
+
+    for epoch in range(args.total_cr):
+        client_weights = []
+        losses = AverageMeter()
+        losses_x = AverageMeter()
+        losses_u = AverageMeter()
+        mask_probs = AverageMeter()
+        for client_id in range(args.num_clients):
+            client_weight, client_losses, client_losses_x, client_losses_u, client_mask_probs = clients[client_id].train(
+                args, model, optimizer, scheduler)
+            client_weights.append(client_weight)
+            losses.update(client_losses)
+            losses_x.update(client_losses_x)
+            losses_u.update(client_losses_u)
+            mask_probs.update(client_mask_probs)
+
+        avg_weights = {}
+        for key in client_weights[0].keys():
+            avg_weights[key] = torch.stack([w[key].float() for w in client_weights]).mean(dim=0)
+
+        model.load_state_dict(avg_weights)
+
+        if args.use_ema:
+            ema_model.update(model)
+
+        if args.use_ema:
+            test_model = ema_model.ema
+        else:
+            test_model = model
+
+        if args.local_rank in [-1, 0]:
+            test_loss, test_acc = test(args, test_loader, test_model, epoch)
+
+            args.writer.add_scalar('train/1.train_loss', losses.avg, epoch)
+            args.writer.add_scalar('train/2.train_loss_x', losses_x.avg, epoch)
+            args.writer.add_scalar('train/3.train_loss_u', losses_u.avg, epoch)
+            args.writer.add_scalar('train/4.mask', mask_probs.avg, epoch)
+            args.writer.add_scalar('test/1.test_acc', test_acc, epoch)
+            args.writer.add_scalar('test/2.test_loss', test_loss, epoch)
+
+            is_best = test_acc > best_acc
+            best_acc = max(test_acc, best_acc)
+
+            model_to_save = model.module if hasattr(model, "module") else model
+            if args.use_ema:
+                ema_to_save = ema_model.ema.module if hasattr(
+                    ema_model.ema, "module") else ema_model.ema
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model_to_save.state_dict(),
+                'ema_state_dict': ema_to_save.state_dict() if args.use_ema else None,
+                'acc': test_acc,
+                'best_acc': best_acc,
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+            }, is_best, args.out)
+
+            test_accs.append(test_acc)
+            logger.info('Best top-1 acc: {:.2f}'.format(best_acc))
+            logger.info('Mean top-1 acc: {:.2f}\n'.format(
+                np.mean(test_accs[-20:])))
+
+    if args.local_rank in [-1, 0]:
+        args.writer.close()
 
 
+# fixmatch original train function
 def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
           model, optimizer, ema_model, scheduler):
     if args.amp:
