@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+import torchvision.transforms.functional
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
@@ -54,7 +55,7 @@ class Client:
         self.labeled_trainloader = labeled_trainloader
         self.unlabeled_trainloader = unlabeled_trainloader
 
-    def train(self, args, global_model):
+    def train(self, args, global_model, progress_transform):
         if args.amp:
             from apex import amp
 
@@ -133,9 +134,23 @@ class Client:
 
                 Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
 
-                pseudo_label = torch.softmax(logits_u_w.detach() / args.T, dim=-1)
-                max_probs, targets_u = torch.max(pseudo_label, dim=-1)
-                mask = max_probs.ge(args.threshold).float()
+                if args.use_progressive:
+                    pseudo_label = torch.softmax(logits_u_w.detach() / args.T, dim=-1) * (2 / (args.pr + 1))
+                    weak_view = inputs_u_w.to(args.device)
+                    for i in range(1, args.pr):
+                        weak_view = progress_transform.progressive_weak(weak_view)
+                        weak_logits = self.model(weak_view)
+                        pseudo_label_i = F.softmax(weak_logits.detach() / args.T, dim=-1)
+                        weight = 2 * (args.pr - i) / (args.pr * (args.pr + 1))
+                        pseudo_label += weight * pseudo_label_i
+
+                    max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+                    assert max_probs.max() <= 1.0
+                    mask = max_probs.ge(args.threshold).float()
+                else:
+                    pseudo_label = torch.softmax(logits_u_w.detach() / args.T, dim=-1)
+                    max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+                    mask = max_probs.ge(args.threshold).float()
 
                 Lu = (F.cross_entropy(logits_u_s, targets_u,
                                       reduction='none') * mask).mean()

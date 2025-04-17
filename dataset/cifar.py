@@ -3,9 +3,13 @@ import logging
 import math
 
 import numpy as np
+import torch
 from PIL import Image
 from torchvision import datasets
 from torchvision import transforms
+import torch.nn as nn
+from torchvision.transforms.functional import to_pil_image
+import kornia.augmentation as K
 
 from .randaugment import RandAugmentMC
 
@@ -112,7 +116,7 @@ def get_federate_cifar10(args, root):
     test_dataset = datasets.CIFAR10(
         root, train=False, transform=transform_val, download=False)
 
-    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset
+    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(mean=cifar10_mean, std=cifar10_std)
 
 
 def get_cifar100(args, root):
@@ -198,7 +202,7 @@ def get_federate_cifar100(args, root):
     test_dataset = datasets.CIFAR100(
         root, train=False, transform=transform_val, download=False)
 
-    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset
+    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(mean=cifar100_mean, std=cifar100_std)
 
 def x_u_split(args, labels, is_federated=False):
     label_per_class = args.num_labeled // args.num_classes
@@ -228,6 +232,62 @@ def x_u_split(args, labels, is_federated=False):
     return labeled_idx, unlabeled_idx
 
 
+class Normalize(nn.Module):
+    """归一化模块（Tensor风格），适配 Kornia 和 PyTorch 的输入"""
+    def __init__(self, mean, std):
+        super().__init__()
+        self.register_buffer('mean', torch.tensor(mean).view(1, -1, 1, 1))
+        self.register_buffer('std', torch.tensor(std).view(1, -1, 1, 1))
+
+    def forward(self, x):
+        mean = self.mean.to(x.device)
+        std = self.std.to(x.device)
+        return (x - mean) / std
+
+
+class Denormalize(nn.Module):
+    """反归一化模块：恢复归一化前的图像"""
+    def __init__(self, mean, std):
+        super().__init__()
+        self.register_buffer('mean', torch.tensor(mean).view(1, -1, 1, 1))
+        self.register_buffer('std', torch.tensor(std).view(1, -1, 1, 1))
+
+    def forward(self, x):
+        mean = self.mean.to(x.device)
+        std = self.std.to(x.device)
+        return x * std + mean
+
+
+class ProgressiveAugmentor(nn.Module):
+    """
+    progressive_weak(x): 对已归一化图像 Tensor 进行 progressive weak augmentation。
+    支持输入 [C, H, W] 或 [B, C, H, W]
+    """
+    def __init__(self, mean, std):
+        super().__init__()
+
+        self.denormalize = Denormalize(mean, std)
+        self.normalize = Normalize(mean, std)
+
+        self.weak = nn.Sequential(
+            K.RandomHorizontalFlip(p=0.5),
+            K.RandomCrop((32, 32), padding=4, padding_mode='reflect')
+        )
+
+    def forward(self, x):
+        single = False
+        if x.dim() == 3:
+            x = x.unsqueeze(0)
+            single = True
+
+        x = self.denormalize(x)     # 1. 反归一化
+        x = x.clamp(0, 1)           # 2. 裁剪为合法图像值
+        x = self.weak(x)            # 3. 增强
+        x = self.normalize(x)       # 4. 重新归一化
+
+        return x.squeeze(0) if single else x
+
+
 class TransformFixMatch(object):
     def __init__(self, mean, std):
         self.weak = transforms.Compose([
@@ -245,10 +305,15 @@ class TransformFixMatch(object):
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std)])
 
+        self.pg_augment = ProgressiveAugmentor(mean, std)
+
     def __call__(self, x):
         weak = self.weak(x)
         strong = self.strong(x)
         return self.normalize(weak), self.normalize(strong)
+
+    def progressive_weak(self, x):
+        return self.pg_augment(x)
 
 
 class CIFAR10SSL(datasets.CIFAR10):

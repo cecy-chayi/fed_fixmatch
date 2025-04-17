@@ -133,6 +133,10 @@ def main():
                         help='number of clients')
     parser.add_argument('--local-ep', type=int, default=5,
                         help='number of local epochs')
+    parser.add_argument('--use-progressive', action='store_true',
+                        help='use progressive fixmatch')
+    parser.add_argument('--pr', type=int, default=10,
+                        help='number of progressive rounds')
 
     args = parser.parse_args()
     global best_acc
@@ -214,7 +218,7 @@ def main():
 
     # labeled_dataset, unlabeled_dataset, test_dataset = DATASET_GETTERS[args.dataset](
     #     args, './data')
-    split_labeled_dataset, split_unlabeled_dataset, test_dataset = FEDERATED_DATASET_GETTERS[args.dataset](
+    split_labeled_dataset, split_unlabeled_dataset, test_dataset, progress_transform = FEDERATED_DATASET_GETTERS[args.dataset](
         args, './data')
 
     if args.local_rank == 0:
@@ -340,7 +344,7 @@ def main():
         mask_probs = AverageMeter()
         for client_id in range(args.num_clients):
             client_weight, client_losses, client_losses_x, client_losses_u, client_mask_probs = clients[client_id].train(
-                args, model)
+                args, model, progress_transform)
             client_weights.append(client_weight)
             losses.update(client_losses)
             losses_x.update(client_losses_x)
@@ -593,8 +597,8 @@ def test(args, test_loader, model, epoch):
         if not args.no_progress:
             test_loader.close()
 
-    logger.info("top-1 acc: {:.2f}".format(top1.avg))
-    logger.info("top-5 acc: {:.2f}".format(top5.avg))
+    logger.info("Round {} top-1 acc: {:.2f}".format(epoch, top1.avg))
+    logger.info("Round {} top-5 acc: {:.2f}".format(epoch, top5.avg))
     return losses.avg, top1.avg
 
 
