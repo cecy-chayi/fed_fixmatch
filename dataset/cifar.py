@@ -115,13 +115,7 @@ def get_federate_cifar10(args, root):
     return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset
 
 
-
-
-
-
-
 def get_cifar100(args, root):
-
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(size=32,
@@ -153,6 +147,58 @@ def get_cifar100(args, root):
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset
 
+
+def get_federate_cifar100(args, root):
+    transform_labeled = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=32,
+                              padding=int(32*0.125),
+                              padding_mode='reflect'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
+
+    transform_val = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
+
+    base_dataset = datasets.CIFAR100(
+        root, train=True, download=True)
+
+    all_data = np.array(base_dataset.data)
+    all_targets = np.array(base_dataset.targets)
+    data_per_client = len(all_data) // args.num_clients
+
+    train_split_labeled_dataset = []
+    train_split_unlabeled_dataset = []
+
+    args.num_labeled = args.num_labeled // args.num_clients
+
+    for i in range(args.num_clients):
+        start = i * data_per_client
+        end = (i + 1) * data_per_client if i != args.num_clients - 1 else len(all_data)
+        client_data = all_data[start:end]
+        client_targets = all_targets[start:end]
+        train_labeled_idxs, train_unlabeled_idxs = x_u_split(
+            args, client_targets, True)
+
+        global_labeled_idx = np.arange(start, end)[train_labeled_idxs]
+        global_unlabeled_idx = np.arange(start, end)[train_unlabeled_idxs]
+
+        labeled_dataset = CIFAR100SSL(
+            root, global_labeled_idx, train=True,
+            transform=transform_labeled)
+
+        unlabeled_dataset = CIFAR100SSL(
+            root, global_unlabeled_idx, train=True,
+            transform=TransformFixMatch(mean=cifar100_mean, std=cifar100_std))
+
+        train_split_labeled_dataset.append(labeled_dataset)
+        train_split_unlabeled_dataset.append(unlabeled_dataset)
+
+    test_dataset = datasets.CIFAR100(
+        root, train=False, transform=transform_val, download=False)
+
+    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset
 
 def x_u_split(args, labels, is_federated=False):
     label_per_class = args.num_labeled // args.num_classes
@@ -260,5 +306,5 @@ DATASET_GETTERS = {'cifar10': get_cifar10,
 
 FEDERATED_DATASET_GETTERS = {
     'cifar10': get_federate_cifar10,
-    # 'cifar100': get_federate_cifar100
+    'cifar100': get_federate_cifar100
 }
