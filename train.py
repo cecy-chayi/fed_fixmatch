@@ -337,6 +337,7 @@ def main():
 
     # TODO(qxr): 联邦学习框架
     clients = []
+    epoch_time = AverageMeter()
     for client_id in range(args.num_clients):
         labeled_dataset = split_labeled_dataset[client_id]
         unlabeled_dataset = split_unlabeled_dataset[client_id]
@@ -367,6 +368,7 @@ def main():
         losses_u = AverageMeter()
         mask_probs = AverageMeter()
         activate_client_idx = np.random.choice(range(args.num_clients), activate_client_per_epoch, replace=False)
+        end = time.time()
         for client_id in activate_client_idx:
             client_weight, client_losses, client_losses_x, client_losses_u, client_mask_probs = clients[client_id].train(
                 args, model,  progress_transform, epoch)
@@ -378,15 +380,12 @@ def main():
             mask_probs.update(client_mask_probs)
 
         total_data = sum(client_data_sizes)
-        client_weights = [size / total_data for size in client_data_sizes]
+        client_w = [size / total_data for size in client_data_sizes]
 
         avg_weights = {}
         for key in client_weights[0].keys():
-            weighted_tensors = [
-                w[key].float() * weight
-                for w, weight in zip(client_weights, client_weights)
-            ]
-            avg_weights[key] = torch.stack(weighted_tensors).sum(dim=0)
+            weighted = [client_weights[i][key].float() * client_w[i] for i in range(len(client_weights))]
+            avg_weights[key] = torch.sum(torch.stack(weighted), dim=0)
 
         model.load_state_dict(avg_weights)
 
@@ -399,6 +398,8 @@ def main():
             test_model = model
 
         if args.local_rank in [-1, 0]:
+            epoch_time.update(time.time() - end)
+            logger.info(f'Avg Epoch Time: {epoch_time.avg}s')
             test_loss, test_acc = test(args, test_loader, test_model, epoch)
 
             args.writer.add_scalar('train/1.train_loss', losses.avg, epoch)

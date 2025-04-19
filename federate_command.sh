@@ -1,1 +1,1 @@
-python train.py --dataset cifar10 --arch wideresnet --batch-size 32 --lr 0.03 --expand-labels --seed 5 --out results/cifar10@0.1 --total-cr 100 --num-clients 50 --frac 0.1 --local-ep 1 --eval-step 128 --dirichlet-alpha 0.8 --labeled-ratio 0.1
+python train.py --dataset cifar10 --arch wideresnet --batch-size 32 --lr 0.03 --expand-labels --seed 5 --out results/cifar10@0.1 --total-cr 100 --num-clients 50 --frac 0.1 --local-ep 1 --eval-step 128 --dirichlet-alpha 0.8 --labeled-ratio 0.1 --wdecay 0.001
