@@ -439,7 +439,7 @@ class CIFAR10SSL(datasets.CIFAR10):
         return img, target
 
 
-class MNISTSSL(datasets.CIFAR10):
+class MNISTSSL(datasets.MNIST):
     def __init__(self, root, indexs, train=True,
                  transform=None, target_transform=None,
                  download=False):
@@ -453,7 +453,7 @@ class MNISTSSL(datasets.CIFAR10):
 
     def __getitem__(self, index):
         img, target = self.data[index], self.targets[index]
-        img = Image.fromarray(img)
+        img = Image.fromarray(img, mode='L')
 
         if self.transform is not None:
             img = self.transform(img)
