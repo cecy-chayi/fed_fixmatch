@@ -214,7 +214,7 @@ def main():
         os.makedirs(args.out, exist_ok=True)
         args.writer = SummaryWriter(args.out)
 
-    if args.dataset == 'cifar10':
+    if args.dataset == 'cifar10' or args.dataset == 'mnist':
         args.num_classes = 10
         if args.arch == 'wideresnet':
             args.model_depth = 28
