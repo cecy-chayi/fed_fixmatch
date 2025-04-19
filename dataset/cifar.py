@@ -20,8 +20,8 @@ cifar10_mean = (0.4914, 0.4822, 0.4465)
 cifar10_std = (0.2471, 0.2435, 0.2616)
 cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
-mean = [0.1307]
-std = [0.3081]
+mnist_mean = [0.1307]
+mnist_std = [0.3081]
 
 
 normal_mean = (0.5, 0.5, 0.5)
@@ -133,11 +133,11 @@ def get_federate_mnist(args, root):
                               padding=int(32 * 0.125),
                               padding_mode='reflect'),
         transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+        transforms.Normalize(mean=mnist_mean, std=mnist_std)
     ])
     transform_val = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+        transforms.Normalize(mean=mnist_mean, std=mnist_std)
     ])
 
     base_dataset = datasets.MNIST(root, train=True, download=True)
@@ -183,11 +183,11 @@ def get_federate_mnist(args, root):
         train_split_labeled_dataset.append(labeled_dataset)
         train_split_unlabeled_dataset.append(unlabeled_dataset)
 
-    test_dataset = datasets.CIFAR10(
+    test_dataset = datasets.MNIST(
         root, train=False, transform=transform_val, download=False)
 
     return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(
-        mean=cifar10_mean, std=cifar10_std)
+        mean=mnist_mean, std=mnist_mean)
 
 
 def get_cifar100(args, root):
@@ -440,13 +440,15 @@ class CIFAR10SSL(datasets.CIFAR10):
 
 
 class MNISTSSL(datasets.MNIST):
-    def __init__(self, root, indexs, train=True,
+    def __init__(self, root, indexs=None, train=True,
                  transform=None, target_transform=None,
                  download=False):
-        super().__init__(root, train=train,
+        super().__init__(root=root, train=train,
                          transform=transform,
                          target_transform=target_transform,
                          download=download)
+
+        # 使用索引子集
         if indexs is not None:
             self.data = self.data[indexs]
             self.targets = np.array(self.targets)[indexs]
