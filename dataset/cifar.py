@@ -162,8 +162,6 @@ def get_federate_mnist(args, root):
     train_split_labeled_dataset = []
     train_split_unlabeled_dataset = []
 
-    args.num_labeled = args.num_labeled // args.num_clients
-
     for i in range(num_clients):
         client_idx = np.array(client_indices[i])
         client_targets = all_targets[client_idx]
