@@ -367,7 +367,7 @@ def main():
         losses_u = AverageMeter()
         mask_probs = AverageMeter()
         activate_client_idx = np.random.choice(range(args.num_clients), activate_client_per_epoch, replace=False)
-        for client_id in range(args.num_clients):
+        for client_id in activate_client_idx:
             client_weight, client_losses, client_losses_x, client_losses_u, client_mask_probs = clients[client_id].train(
                 args, model,  progress_transform, epoch)
             client_weights.append(client_weight)
