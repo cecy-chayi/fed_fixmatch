@@ -71,14 +71,14 @@ class NetworkBlock(nn.Module):
 
 
 class WideResNet(nn.Module):
-    def __init__(self, num_classes, depth=28, widen_factor=2, drop_rate=0.0):
+    def __init__(self, num_classes, depth=28, widen_factor=2, drop_rate=0.0, num_channels=3):
         super(WideResNet, self).__init__()
         channels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         assert((depth - 4) % 6 == 0)
         n = (depth - 4) / 6
         block = BasicBlock
         # 1st conv before any network block
-        self.conv1 = nn.Conv2d(3, channels[0], kernel_size=3, stride=1,
+        self.conv1 = nn.Conv2d(num_channels, channels[0], kernel_size=3, stride=1,
                                padding=1, bias=False)
         # 1st block
         self.block1 = NetworkBlock(
@@ -118,9 +118,10 @@ class WideResNet(nn.Module):
         return self.fc(out)
 
 
-def build_wideresnet(depth, widen_factor, dropout, num_classes):
+def build_wideresnet(depth, widen_factor, dropout, num_classes, num_channels):
     logger.info(f"Model: WideResNet {depth}x{widen_factor}")
     return WideResNet(depth=depth,
                       widen_factor=widen_factor,
                       drop_rate=dropout,
-                      num_classes=num_classes)
+                      num_classes=num_classes,
+                      num_channels=num_channels)

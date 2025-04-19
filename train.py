@@ -157,7 +157,8 @@ def main():
             model = models.build_wideresnet(depth=args.model_depth,
                                             widen_factor=args.model_width,
                                             dropout=0,
-                                            num_classes=args.num_classes)
+                                            num_classes=args.num_classes,
+                                            num_channels=3 if args.dataset == 'cifar10' or args.dataset == 'cifar100' else 1)
         elif args.arch == 'resnext':
             import models.resnext as models
             model = models.build_resnext(cardinality=args.model_cardinality,
