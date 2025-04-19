@@ -455,7 +455,7 @@ class MNISTSSL(datasets.MNIST):
 
     def __getitem__(self, index):
         img, target = self.data[index], self.targets[index]
-        img = Image.fromarray(img, mode='L')
+        img = Image.fromarray(img.numpy(), mode='L')
 
         if self.transform is not None:
             img = self.transform(img)
