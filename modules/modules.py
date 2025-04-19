@@ -54,8 +54,9 @@ class Client:
         self.model.to(args.device)
         self.labeled_trainloader = labeled_trainloader
         self.unlabeled_trainloader = unlabeled_trainloader
+        self.data_size = len(self.labeled_trainloader.dataset) + len(self.unlabeled_trainloader.dataset)
 
-    def train(self, args, global_model, progress_transform):
+    def train(self, args, global_model, progress_transform, epoch):
         if args.amp:
             from apex import amp
 
@@ -80,6 +81,9 @@ class Client:
         scheduler = get_cosine_schedule_with_warmup(
             optimizer, args.warmup, args.total_steps)
 
+        threshold = args.threshold
+        if args.use_progressive:
+            threshold = args.threshold - (epoch / args.total_cr) * (args.threshold - args.final_threshold)
         for epoch in range(args.local_ep):
             self.model.train()
             labeled_iter = iter(self.labeled_trainloader)
@@ -146,11 +150,11 @@ class Client:
 
                     max_probs, targets_u = torch.max(pseudo_label, dim=-1)
                     assert max_probs.max() <= 1.0
-                    mask = max_probs.ge(args.threshold).float()
+                    mask = max_probs.ge(threshold).float()
                 else:
                     pseudo_label = torch.softmax(logits_u_w.detach() / args.T, dim=-1)
                     max_probs, targets_u = torch.max(pseudo_label, dim=-1)
-                    mask = max_probs.ge(args.threshold).float()
+                    mask = max_probs.ge(threshold).float()
 
                 Lu = (F.cross_entropy(logits_u_s, targets_u,
                                       reduction='none') * mask).mean()

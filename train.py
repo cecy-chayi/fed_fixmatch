@@ -21,6 +21,7 @@ from modules.modules import Client
 
 from dataset.cifar import DATASET_GETTERS
 from dataset.cifar import FEDERATED_DATASET_GETTERS
+from torchvision.models import resnet18
 from utils import AverageMeter, accuracy
 
 logger = logging.getLogger(__name__)
@@ -75,14 +76,14 @@ def main():
     parser.add_argument('--num-workers', type=int, default=4,
                         help='number of workers')
     parser.add_argument('--dataset', default='cifar10', type=str,
-                        choices=['cifar10', 'cifar100'],
+                        choices=['cifar10', 'mnist'],
                         help='dataset name')
-    parser.add_argument('--num-labeled', type=int, default=4000,
-                        help='number of labeled data')
+    # parser.add_argument('--num-labeled', type=int, default=4000,
+    #                     help='number of labeled data')
     parser.add_argument("--expand-labels", action="store_true",
                         help="expand labels to fit eval steps")
     parser.add_argument('--arch', default='wideresnet', type=str,
-                        choices=['wideresnet', 'resnext'],
+                        choices=['wideresnet', 'resnext', 'resnet18'],
                         help='dataset name')
     parser.add_argument('--total-steps', default=2**20, type=int,
                         help='number of total steps to run')
@@ -112,6 +113,8 @@ def main():
                         help='pseudo label temperature')
     parser.add_argument('--threshold', default=0.95, type=float,
                         help='pseudo label threshold')
+    parser.add_argument('--final-threshold', default=0.85, type=float,
+                        help='final label threshold')
     parser.add_argument('--out', default='result',
                         help='directory to output the result')
     parser.add_argument('--resume', default='', type=str,
@@ -135,8 +138,14 @@ def main():
                         help='number of local epochs')
     parser.add_argument('--use-progressive', action='store_true',
                         help='use progressive fixmatch')
-    parser.add_argument('--pr', type=int, default=10,
+    parser.add_argument('--pr', type=int, default=3,
                         help='number of progressive rounds')
+    parser.add_argument('--frac', type=float, default=0.1,
+                        help='fraction of client')
+    parser.add_argument('--labeled-ratio', type=float, default=0.1,
+                        help='fraction of labeled data per client')
+    parser.add_argument('--dirichlet-alpha', type=float, default=0.8,
+                        help='dirichlet concentration ')
 
     args = parser.parse_args()
     global best_acc
@@ -155,6 +164,17 @@ def main():
                                          depth=args.model_depth,
                                          width=args.model_width,
                                          num_classes=args.num_classes)
+        elif args.arch == 'resnet18':
+            from torchvision.models import resnet18
+            from torch import nn
+            model = resnet18(num_classes=args.num_classes)
+            if args.dataset == 'cifar10' or args.dataset == 'cifar100':
+                model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                model.maxpool = nn.Identity()
+            elif args.data == 'mnist':
+                model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                model.maxpool = nn.Identity()
+
         logger.info("Total params: {:.2f}M".format(
             sum(p.numel() for p in model.parameters())/1e6))
         return model
@@ -232,6 +252,7 @@ def main():
     #     batch_size=args.batch_size,
     #     num_workers=args.num_workers,
     #     drop_last=True)
+    #     drop_last=True)
     #
     # unlabeled_trainloader = DataLoader(
     #     unlabeled_dataset,
@@ -302,7 +323,7 @@ def main():
             output_device=args.local_rank, find_unused_parameters=True)
 
     logger.info("***** Running training *****")
-    logger.info(f"  Task = {args.dataset}@{args.num_labeled * args.num_clients}")
+    logger.info(f"  Task = {args.dataset}@{args.labeled_ratio}")
     logger.info(f"  Num Epochs = {args.epochs}")
     logger.info(f"  Batch size per GPU = {args.batch_size}")
     logger.info(
@@ -336,24 +357,36 @@ def main():
         client = Client(args, client_id, model, labeled_trainloader, unlabeled_trainloader)
         clients.append(client)
 
+    activate_client_per_epoch = int(args.frac * args.num_clients)
+
     for epoch in range(args.start_epoch, args.total_cr):
         client_weights = []
+        client_data_sizes = []
         losses = AverageMeter()
         losses_x = AverageMeter()
         losses_u = AverageMeter()
         mask_probs = AverageMeter()
+        activate_client_idx = np.random.choice(range(args.num_clients), activate_client_per_epoch, replace=False)
         for client_id in range(args.num_clients):
             client_weight, client_losses, client_losses_x, client_losses_u, client_mask_probs = clients[client_id].train(
-                args, model, progress_transform)
+                args, model,  progress_transform, epoch)
             client_weights.append(client_weight)
+            client_data_sizes.append(clients[client_id].data_size)
             losses.update(client_losses)
             losses_x.update(client_losses_x)
             losses_u.update(client_losses_u)
             mask_probs.update(client_mask_probs)
 
+        total_data = sum(client_data_sizes)
+        client_weights = [size / total_data for size in client_data_sizes]
+
         avg_weights = {}
         for key in client_weights[0].keys():
-            avg_weights[key] = torch.stack([w[key].float() for w in client_weights]).mean(dim=0)
+            weighted_tensors = [
+                w[key].float() * weight
+                for w, weight in zip(client_weights, client_weights)
+            ]
+            avg_weights[key] = torch.stack(weighted_tensors).sum(dim=0)
 
         model.load_state_dict(avg_weights)
 

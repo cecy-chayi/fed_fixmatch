@@ -1,4 +1,4 @@
-import copy
+import argparse
 import logging
 import math
 
@@ -10,8 +10,9 @@ from torchvision import transforms
 import torch.nn as nn
 from torchvision.transforms.functional import to_pil_image
 import kornia.augmentation as K
+import random
 
-from .randaugment import RandAugmentMC
+from dataset.randaugment import RandAugmentMC
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,10 @@ cifar10_mean = (0.4914, 0.4822, 0.4465)
 cifar10_std = (0.2471, 0.2435, 0.2616)
 cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
+mean = [0.1307]
+std = [0.3081]
+
+
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
 
@@ -57,15 +62,7 @@ def get_cifar10(args, root):
 
 def get_federate_cifar10(args, root):
     """
-    生成每个客户端的数据集，划分方法是：将cifar10数据集平均分到每个客户端中，然后再对每个客户端上的数据集利用
-    x_u_split函数得到每个客户端的labeled和unlabeled数据集
-    Args:
-        args: args.num_labeled记录了所有客户端上labeled数据的数量
-        root: 数据集的根目录
-    Returns:
-        train_labeled_dataset: 所有客户端上的labeled数据集的列表
-        train_unlabeled_dataset: 所有客户端上的unlabeled数据集的列表
-        test_dataset: 测试集
+    生成每个客户端的数据集，支持 Dirichlet 非独立同分布划分
     """
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -79,28 +76,38 @@ def get_federate_cifar10(args, root):
         transforms.ToTensor(),
         transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
     ])
+
     base_dataset = datasets.CIFAR10(root, train=True, download=True)
     all_data = np.array(base_dataset.data)
     all_targets = np.array(base_dataset.targets)
-    data_per_client = len(all_data) // args.num_clients
+
+    num_classes = args.num_classes
+    num_clients = args.num_clients
+    alpha = 0.8  # Dirichlet 分布的 concentration 参数
+
+    # 构建 Dirichlet 分布的 client 分配索引
+    client_indices = [[] for _ in range(num_clients)]
+    for c in range(num_classes):
+        idxs = np.where(all_targets == c)[0]
+        np.random.shuffle(idxs)
+        proportions = np.random.dirichlet(alpha=[alpha]*num_clients)
+        proportions = (np.cumsum(proportions) * len(idxs)).astype(int)[:-1]
+        split_indices = np.split(idxs, proportions)
+        for i, client_idx in enumerate(split_indices):
+            client_indices[i].extend(client_idx)
 
     train_split_labeled_dataset = []
     train_split_unlabeled_dataset = []
 
-    args.num_labeled = args.num_labeled // args.num_clients
+    for i in range(num_clients):
+        client_idx = np.array(client_indices[i])
+        client_targets = all_targets[client_idx]
 
-    for i in range(args.num_clients):
-        start = i * data_per_client
-        end = (i + 1) * data_per_client if i != args.num_clients - 1 else len(all_data)
+        train_labeled_idxs, train_unlabeled_idxs = dirichlet_x_u_split(
+            args, client_targets)
 
-        client_data = all_data[start:end]
-        client_targets = all_targets[start:end]
-
-        train_labeled_idxs, train_unlabeled_idxs = x_u_split(
-            args, client_targets, True)
-
-        global_labeled_idx = np.arange(start, end)[train_labeled_idxs]
-        global_unlabeled_idx = np.arange(start, end)[train_unlabeled_idxs]
+        global_labeled_idx = client_idx[train_labeled_idxs]
+        global_unlabeled_idx = client_idx[train_unlabeled_idxs]
 
         labeled_dataset = CIFAR10SSL(
             root, global_labeled_idx, train=True,
@@ -117,6 +124,72 @@ def get_federate_cifar10(args, root):
         root, train=False, transform=transform_val, download=False)
 
     return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(mean=cifar10_mean, std=cifar10_std)
+
+
+def get_federate_mnist(args, root):
+    transform_labeled = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=32,
+                              padding=int(32 * 0.125),
+                              padding_mode='reflect'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+    ])
+    transform_val = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+    ])
+
+    base_dataset = datasets.MNIST(root, train=True, download=True)
+    all_data = np.array(base_dataset.data)
+    all_targets = np.array(base_dataset.targets)
+
+    num_classes = args.num_classes
+    num_clients = args.num_clients
+    alpha = 0.8  # Dirichlet 分布的 concentration 参数
+
+    # 构建 Dirichlet 分布的 client 分配索引
+    client_indices = [[] for _ in range(num_clients)]
+    for c in range(num_classes):
+        idxs = np.where(all_targets == c)[0]
+        np.random.shuffle(idxs)
+        proportions = np.random.dirichlet(alpha=[alpha] * num_clients)
+        proportions = (np.cumsum(proportions) * len(idxs)).astype(int)[:-1]
+        split_indices = np.split(idxs, proportions)
+        for i, client_idx in enumerate(split_indices):
+            client_indices[i].extend(client_idx)
+
+    train_split_labeled_dataset = []
+    train_split_unlabeled_dataset = []
+
+    args.num_labeled = args.num_labeled // args.num_clients
+
+    for i in range(num_clients):
+        client_idx = np.array(client_indices[i])
+        client_targets = all_targets[client_idx]
+
+        train_labeled_idxs, train_unlabeled_idxs = dirichlet_x_u_split(
+            args, client_targets)
+
+        global_labeled_idx = client_idx[train_labeled_idxs]
+        global_unlabeled_idx = client_idx[train_unlabeled_idxs]
+
+        labeled_dataset = MNISTSSL(
+            root, global_labeled_idx, train=True,
+            transform=transform_labeled)
+
+        unlabeled_dataset = MNISTSSL(
+            root, global_unlabeled_idx, train=True,
+            transform=TransformFixMatch(mean=mnist_mean, std=mnist_std))
+
+        train_split_labeled_dataset.append(labeled_dataset)
+        train_split_unlabeled_dataset.append(unlabeled_dataset)
+
+    test_dataset = datasets.CIFAR10(
+        root, train=False, transform=transform_val, download=False)
+
+    return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(
+        mean=cifar10_mean, std=cifar10_std)
 
 
 def get_cifar100(args, root):
@@ -183,7 +256,7 @@ def get_federate_cifar100(args, root):
         client_data = all_data[start:end]
         client_targets = all_targets[start:end]
         train_labeled_idxs, train_unlabeled_idxs = x_u_split(
-            args, client_targets, True)
+            args, client_targets)
 
         global_labeled_idx = np.arange(start, end)[train_labeled_idxs]
         global_unlabeled_idx = np.arange(start, end)[train_unlabeled_idxs]
@@ -204,7 +277,39 @@ def get_federate_cifar100(args, root):
 
     return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(mean=cifar100_mean, std=cifar100_std)
 
-def x_u_split(args, labels, is_federated=False):
+
+def dirichlet_x_u_split(args, labels):
+    """
+    用于 Dirichlet non-IID 数据划分后的标签/无标签拆分
+
+    Args:
+        args: 包含 batch_size, local_ep 等训练参数
+        labels: 当前客户端的标签（已被 Dirichlet 分配）
+
+    Returns:
+        labeled_idx: 有标签样本索引（相对于当前客户端）
+        unlabeled_idx: 无标签样本索引
+    """
+    labels = np.array(labels)
+    n_total = len(labels)
+    n_labeled = int(n_total * args.labeled_ratio)
+
+    all_indices = np.arange(n_total)
+    np.random.shuffle(all_indices)
+
+    labeled_idx = all_indices[:n_labeled]
+    unlabeled_idx = all_indices
+
+    if args.expand_labels or args.num_labeled < args.batch_size:
+        num_expand_x = math.ceil(
+            args.batch_size * args.eval_step / n_labeled)
+        labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
+    np.random.shuffle(labeled_idx)
+
+    return labeled_idx, unlabeled_idx
+
+
+def x_u_split(args, labels):
     label_per_class = args.num_labeled // args.num_classes
     labels = np.array(labels)
     labeled_idx = []
@@ -215,20 +320,15 @@ def x_u_split(args, labels, is_federated=False):
         idx = np.random.choice(idx, label_per_class, False)
         labeled_idx.extend(idx)
     labeled_idx = np.array(labeled_idx)
-    assert len(labeled_idx) == args.num_labeled
+    if len(labeled_idx) != args.num_labeled:
+        print(len(labeled_idx), args.num_labeled)
+        assert len(labeled_idx) == args.num_labeled
 
-    if not is_federated:
-        if args.expand_labels or args.num_labeled < args.batch_size:
-            num_expand_x = math.ceil(
-                args.batch_size * args.eval_step / args.num_labeled)
-            labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
-        np.random.shuffle(labeled_idx)
-    else:
-        if args.expand_labels or args.num_labeled < args.batch_size:
-            num_expand_x = math.ceil(
-                args.batch_size * args.local_ep / args.num_labeled)
-            labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
-        np.random.shuffle(labeled_idx)
+    if args.expand_labels or args.num_labeled < args.batch_size:
+        num_expand_x = math.ceil(
+            args.batch_size * args.eval_step / args.num_labeled)
+        labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
+    np.random.shuffle(labeled_idx)
     return labeled_idx, unlabeled_idx
 
 
@@ -341,6 +441,31 @@ class CIFAR10SSL(datasets.CIFAR10):
         return img, target
 
 
+class MNISTSSL(datasets.CIFAR10):
+    def __init__(self, root, indexs, train=True,
+                 transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, train=train,
+                         transform=transform,
+                         target_transform=target_transform,
+                         download=download)
+        if indexs is not None:
+            self.data = self.data[indexs]
+            self.targets = np.array(self.targets)[indexs]
+
+    def __getitem__(self, index):
+        img, target = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target
+
+
 class CIFAR100SSL(datasets.CIFAR100):
     def __init__(self, root, indexs, train=True,
                  transform=None, target_transform=None,
@@ -371,5 +496,72 @@ DATASET_GETTERS = {'cifar10': get_cifar10,
 
 FEDERATED_DATASET_GETTERS = {
     'cifar10': get_federate_cifar10,
-    'cifar100': get_federate_cifar100
+    'cifar100': get_federate_cifar100,
+    'mnist': get_federate_mnist
 }
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='PyTorch FixMatch Training')
+    parser.add_argument('--dataset', default='cifar10', type=str,
+                        choices=['cifar10', 'cifar100'],
+                        help='dataset name')
+    parser.add_argument('--num-labeled', type=int, default=40,
+                        help='number of labeled data')
+    parser.add_argument("--expand-labels", action="store_true",
+                        help="expand labels to fit eval steps")
+    parser.add_argument('--batch-size', default=64, type=int,
+                        help='train batchsize')
+    parser.add_argument('--seed', default=None, type=int,
+                        help="random seed")
+    parser.add_argument('--eval-step', default=32, type=int,
+                        help="random seed")
+    parser.add_argument('--num-clients', type=int, default=10,
+                        help='number of clients')
+    parser.add_argument('--dirichlet-alpha', type=float, default=0.8,
+                        help='dirichlet concentration ')
+    parser.add_argument('--labeled-ratio',type=float, default=0.1)
+
+    args = parser.parse_args()
+    args.num_classes = 10
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    split_labeled_dataset, split_unlabeled_dataset, test_dataset, progress_transform = get_federate_cifar10(args=args, root='../data')
+    # 可视化不同客户端的标签分布
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # 1. 收集所有客户端的标签分布
+    num_clients = args.num_clients
+    num_classes = 10  # CIFAR10 固定为10类
+    client_label_counts = np.zeros((num_clients, num_classes), dtype=int)
+
+    for client_id in range(num_clients):
+        targets = split_labeled_dataset[client_id].targets  # 获取客户端标签
+        unique, counts = np.unique(targets, return_counts=True)
+        client_label_counts[client_id, unique] = counts
+
+    # 2. 绘制热图
+    plt.figure(figsize=(15, 8))
+    sns.heatmap(client_label_counts, cmap="Blues", annot=False, cbar=True)
+    plt.xlabel("Class Label", fontsize=12)
+    plt.ylabel("Client ID", fontsize=12)
+    plt.title(f"Non-IID Label Distribution (Dirichlet α={args.dirichlet_alpha})", fontsize=14)
+    plt.savefig("client_label_distribution.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # 3. 输出统计指标
+    coverage_per_client = np.sum(client_label_counts > 0, axis=1)
+    samples_per_client = np.sum(client_label_counts, axis=1)
+
+    print("\n=== 分布统计指标 ===")
+    print(f"平均每个客户端覆盖类别数: {np.mean(coverage_per_client):.2f}")
+    print(f"最小覆盖类别数: {np.min(coverage_per_client)}")
+    print(f"最大覆盖类别数: {np.max(coverage_per_client)}")
+    print(f"客户端样本量方差: {np.var(samples_per_client):.2f}")
+
+    # 4. 检查极端情况
+    print("\n=== 极端情况检查 ===")
+    print(f"存在客户端完全缺失 {num_classes - np.max(coverage_per_client)} 个类别")
+    print(f"最小客户端样本量: {np.min(samples_per_client)}")
+    print(f"最大客户端样本量: {np.max(samples_per_client)}")
+
