@@ -76,7 +76,7 @@ def main():
     parser.add_argument('--num-workers', type=int, default=4,
                         help='number of workers')
     parser.add_argument('--dataset', default='cifar10', type=str,
-                        choices=['cifar10', 'mnist'],
+                        choices=['cifar10', 'fmnist'],
                         help='dataset name')
     # parser.add_argument('--num-labeled', type=int, default=4000,
     #                     help='number of labeled data')
@@ -172,7 +172,7 @@ def main():
             if args.dataset == 'cifar10' or args.dataset == 'cifar100':
                 model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
                 model.maxpool = nn.Identity()
-            elif args.data == 'mnist':
+            elif args.data == 'fmnist':
                 model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
                 model.maxpool = nn.Identity()
 
@@ -214,7 +214,7 @@ def main():
         os.makedirs(args.out, exist_ok=True)
         args.writer = SummaryWriter(args.out)
 
-    if args.dataset == 'cifar10' or args.dataset == 'mnist':
+    if args.dataset == 'cifar10' or args.dataset == 'fmnist':
         args.num_classes = 10
         if args.arch == 'wideresnet':
             args.model_depth = 28

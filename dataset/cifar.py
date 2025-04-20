@@ -20,8 +20,8 @@ cifar10_mean = (0.4914, 0.4822, 0.4465)
 cifar10_std = (0.2471, 0.2435, 0.2616)
 cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
-mnist_mean = [0.1307]
-mnist_std = [0.3081]
+fmnist_mean = [0.2860]
+fmnist_std = [0.3205]
 
 
 normal_mean = (0.5, 0.5, 0.5)
@@ -126,21 +126,21 @@ def get_federate_cifar10(args, root):
     return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(mean=cifar10_mean, std=cifar10_std)
 
 
-def get_federate_mnist(args, root):
+def get_federate_fmnist(args, root):
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(size=32,
                               padding=int(32 * 0.125),
                               padding_mode='reflect'),
         transforms.ToTensor(),
-        transforms.Normalize(mean=mnist_mean, std=mnist_std)
+        transforms.Normalize(mean=fmnist_mean, std=fmnist_std)
     ])
     transform_val = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=mnist_mean, std=mnist_std)
+        transforms.Normalize(mean=fmnist_mean, std=fmnist_std)
     ])
 
-    base_dataset = datasets.MNIST(root, train=True, download=True)
+    base_dataset = datasets.FashionMNIST(root, train=True, download=True)
     all_data = np.array(base_dataset.data)
     all_targets = np.array(base_dataset.targets)
 
@@ -172,22 +172,22 @@ def get_federate_mnist(args, root):
         global_labeled_idx = client_idx[train_labeled_idxs]
         global_unlabeled_idx = client_idx[train_unlabeled_idxs]
 
-        labeled_dataset = MNISTSSL(
+        labeled_dataset = FMNISTSSL(
             root, global_labeled_idx, train=True,
             transform=transform_labeled)
 
-        unlabeled_dataset = MNISTSSL(
+        unlabeled_dataset = FMNISTSSL(
             root, global_unlabeled_idx, train=True,
-            transform=TransformFixMatch(mean=mnist_mean, std=mnist_std))
+            transform=TransformFixMatch(mean=fmnist_mean, std=fmnist_std))
 
         train_split_labeled_dataset.append(labeled_dataset)
         train_split_unlabeled_dataset.append(unlabeled_dataset)
 
-    test_dataset = datasets.MNIST(
+    test_dataset = datasets.FashionMNIST(
         root, train=False, transform=transform_val, download=False)
 
     return train_split_labeled_dataset, train_split_unlabeled_dataset, test_dataset, TransformFixMatch(
-        mean=mnist_mean, std=mnist_mean)
+        mean=fmnist_mean, std=fmnist_mean)
 
 
 def get_cifar100(args, root):
@@ -439,7 +439,7 @@ class CIFAR10SSL(datasets.CIFAR10):
         return img, target
 
 
-class MNISTSSL(datasets.MNIST):
+class FMNISTSSL(datasets.FashionMNIST):
     def __init__(self, root, indexs=None, train=True,
                  transform=None, target_transform=None,
                  download=False):
@@ -497,7 +497,7 @@ DATASET_GETTERS = {'cifar10': get_cifar10,
 FEDERATED_DATASET_GETTERS = {
     'cifar10': get_federate_cifar10,
     'cifar100': get_federate_cifar100,
-    'mnist': get_federate_mnist
+    'fmnist': get_federate_fmnist,
 }
 
 if __name__ == '__main__':
