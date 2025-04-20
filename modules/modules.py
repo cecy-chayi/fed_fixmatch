@@ -82,7 +82,7 @@ class Client:
             optimizer, args.warmup, args.total_steps)
 
         threshold = args.threshold
-        if args.use_progressive:
+        if args.use_dynamic_threshold:
             threshold = args.threshold - (epoch / args.total_cr) * (args.threshold - args.final_threshold)
         for epoch in range(args.local_ep):
             self.model.train()

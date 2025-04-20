@@ -1,9 +1,9 @@
 result
 results
-federate_command.sh
 cifar_test.py
 example.jpg
 data
+.gitignore
 .vscode
 .idea
 # Byte-compiled / optimized / DLL files

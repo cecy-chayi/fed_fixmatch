@@ -138,6 +138,8 @@ def main():
                         help='number of local epochs')
     parser.add_argument('--use-progressive', action='store_true',
                         help='use progressive fixmatch')
+    parser.add_argument('--use-dynamic-threshold', action='store_true',
+                        help='use dynamic_threshold')
     parser.add_argument('--pr', type=int, default=3,
                         help='number of progressive rounds')
     parser.add_argument('--frac', type=float, default=0.1,
